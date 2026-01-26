@@ -3,6 +3,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 import os
 import logging
+from io import BytesIO
 
 logger = logging.getLogger(__name__)
 
@@ -97,18 +98,22 @@ class S3Service:
         try:
             # Determine content type
             content_type = file.content_type or 'application/octet-stream'
+            # Read the file once into memory to avoid reuse/closed stream issues
+            try:
+                file_bytes = file.read()
+            except ValueError as e:
+                logger.error(f'File stream error before upload: {str(e)}')
+                return None
             
             # Try to upload with public-read ACL first (like the reference service)
             # If ACL is disabled, fall back to private upload with presigned URL
             try:
-                self.s3_client.upload_fileobj(
-                    file,
-                    self.bucket_name,
-                    key,
-                    ExtraArgs={
-                        'ContentType': content_type,
-                        'ACL': 'public-read'
-                    }
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=key,
+                    Body=file_bytes,
+                    ContentType=content_type,
+                    ACL='public-read'
                 )
                 # If ACL worked, use direct public URL
                 # Use virtual-hosted-style URL (works with addressing_style: 'virtual')
@@ -119,18 +124,16 @@ class S3Service:
                 error_code = acl_error.response.get('Error', {}).get('Code', '')
                 if error_code in ['InvalidArgument', 'AccessControlListNotSupported']:
                     logger.warning(f'ACL not supported (code: {error_code}), uploading without ACL: {key}')
-                    file.seek(0)  # Reset file pointer
-                    self.s3_client.upload_fileobj(
-                        file,
-                        self.bucket_name,
-                        key,
-                        ExtraArgs={
-                            'ContentType': content_type
-                        }
+                    self.s3_client.put_object(
+                        Bucket=self.bucket_name,
+                        Key=key,
+                        Body=file_bytes,
+                        ContentType=content_type
                     )
                     # Generate presigned URL (more reliable than direct URL for private buckets)
                     # Use presigned URL as primary method when ACL is disabled
-                    presigned_url = self.get_presigned_url(key, expiration=31536000)  # 1 year
+                    # S3 presigned URL max expiry is 7 days (604800 seconds)
+                    presigned_url = self.get_presigned_url(key, expiration=604800)
                     if presigned_url:
                         url = presigned_url
                         logger.info(f'File uploaded without ACL, using presigned URL: {url[:100]}...')
