@@ -1,136 +1,98 @@
 # File Service
 
-File Service is a Flask-based microservice that handles image file uploads to AWS S3 for the Forum Project. This service is used by other services (post, reply, message) when they need to attach images.
+A microservice for managing file uploads, downloads, and deletions using AWS S3.
+
+## Features
+
+- File upload/download/delete operations
+- Presigned URLs for secure file access
+- Direct client-to-S3 upload support
+- File organization by type (profile, post, attachment, general)
+- File validation (type and size limits)
 
 ## Tech Stack
 
-- **Framework**: Flask 3.0
-- **Storage**: AWS S3
-- **AWS SDK**: boto3
+- Flask 3.0.0
+- AWS S3 (boto3 1.34.14)
+- JWT authentication via headers
 
-## Project Structure
+## Environment Variables
 
-```
-file-service/
-├── app/
-│   ├── __init__.py              # Flask application factory
-│   ├── config.py                # Configuration (S3, file settings)
-│   ├── routes/
-│   │   ├── __init__.py
-│   │   └── upload_routes.py    # Upload endpoints
-│   ├── services/
-│   │   ├── __init__.py
-│   │   └── s3_service.py       # S3 upload service
-│   └── utils/
-│       ├── __init__.py
-│       └── file_validator.py   # File validation utilities
-├── run.py                       # Application entry point
-├── requirements.txt             # Python dependencies
-└── README.md
+```env
+SECRET_KEY=your-secret-key-here
+FLASK_ENV=development
+JWT_SECRET=your-super-secret-jwt-key
+AWS_ACCESS_KEY_ID=your-aws-access-key-id
+AWS_SECRET_ACCESS_KEY=your-aws-secret-access-key
+AWS_REGION=us-east-1
+S3_BUCKET_NAME=forum-uploads
 ```
 
-## API Endpoints
+## Installation
 
-### POST /api/files/upload
-
-Upload an image file to S3.
-
-**Request:**
-- Method: POST
-- Content-Type: multipart/form-data
-- Body: Form data with `file` field containing the image file
-
-**Response (Success - 200):**
-```json
-{
-  "message": "File uploaded successfully",
-  "url": "https://forum-project-files.s3.us-east-1.amazonaws.com/{unique-filename}.jpg"
-}
-```
-
-**Response (Error - 400):**
-```json
-{
-  "message": "File validation failed",
-  "error": "File type not allowed. Allowed types: png, jpg, jpeg, gif, webp"
-}
-```
-
-**Response (Error - 500):**
-```json
-{
-  "message": "Upload failed",
-  "error": "Error details"
-}
-```
-
-## Configuration
-
-The service uses environment variables loaded from a `.env` file for configuration.
-
-### Environment Variables
-
-Create a `.env` file in the root directory (see `.env.example` for template):
-
-- `AWS_ACCESS_KEY_ID`: AWS access key (required)
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key (required)
-- `AWS_REGION`: AWS region (default: us-east-1)
-- `S3_BUCKET_NAME`: S3 bucket name (default: forum-project-files)
-- `SECRET_KEY`: Flask secret key (default: file-service-secret-key)
-
-**Note:** The `.env` file is already included in `.gitignore` to prevent committing sensitive credentials.
-
-### Other Settings
-
-- `MAX_FILE_SIZE`: Maximum file size in bytes (default: 10MB) - configured in `config.py`
-- `ALLOWED_EXTENSIONS`: Allowed file extensions (default: png, jpg, jpeg, gif, webp) - configured in `config.py`
-
-## File Validation
-
-- Only image files are allowed (png, jpg, jpeg, gif, webp)
-- Maximum file size: 10MB
-- Files are automatically assigned unique UUID-based filenames to prevent conflicts
-
-## Usage
-
-1. Install dependencies:
 ```bash
 pip install -r requirements.txt
-```
-
-2. Create `.env` file:
-```bash
-# Copy the example file and fill in your credentials
-cp .env.example .env
-# Edit .env with your AWS credentials
-```
-
-3. Run the service:
-```bash
 python run.py
 ```
 
-The service will run on `http://0.0.0.0:5003`
+Service runs on `http://localhost:5005`
 
-## Example Usage
+## File Organization
 
-```bash
-curl -X POST http://localhost:5003/api/files/upload \
-  -F "file=@/path/to/image.jpg"
-```
+Files are stored in S3 with structure: `{file_type}/{user_id}/{uuid}.{extension}`
 
-Response:
-```json
-{
-  "message": "File uploaded successfully",
-  "url": "https://forum-project-files.s3.us-east-1.amazonaws.com/123e4567-e89b-12d3-a456-426614174000.jpg"
-}
-```
+- File types: `profile`, `post`, `attachment`, `general`
+- Max file size: 16 MB
+- Allowed extensions: `png`, `jpg`, `jpeg`, `gif`, `pdf`, `doc`, `docx`, `txt`
 
-## Integration with Other Services
+## API Endpoints
 
-Other services (post, reply, message) can call this service to upload images:
+### Upload File
+**POST** `/files/upload`
+- Headers: `Authorization: Bearer <token>`, `X-User-Id: <id>`
+- Body: `multipart/form-data` with `file` and optional `type`
+- Returns: `{ "key": "...", "url": "..." }`
 
-1. Make a POST request to `/api/files/upload` with the image file
-2. Receive the S3 URL in the response
-3. Store the URL in their database records
+### Get File URL
+**GET** `/files/{key}`
+- Headers: `Authorization: Bearer <token>`, `X-User-Id: <id>`
+- Returns: Presigned URL for file download
+
+### Delete File
+**DELETE** `/files/{key}`
+- Headers: `Authorization: Bearer <token>`, `X-User-Id: <id>`, `X-User-Type: <type>`
+- Only owner or admin can delete
+
+### Get Presigned Upload URL
+**POST** `/files/presigned-upload`
+- Headers: `Authorization: Bearer <token>`, `X-User-Id: <id>`
+- Body: `{ "filename": "...", "type": "..." }`
+- Returns: Presigned URL and form fields for direct S3 upload
+
+### Health Check
+**GET** `/health`
+
+## Authentication
+
+All endpoints require:
+- `X-User-Id`: User ID from JWT token
+- `X-User-Type`: User role (for admin access)
+
+## AWS S3 Setup
+
+1. Create S3 bucket
+2. Configure IAM user with permissions:
+   - `s3:PutObject`
+   - `s3:GetObject`
+   - `s3:DeleteObject`
+   - `s3:GetBucketLocation`
+3. Set bucket CORS for direct client uploads (optional)
+
+## Error Codes
+
+- **400**: Bad Request (invalid file type, missing file)
+- **401**: Unauthorized
+- **403**: Forbidden (not owner/admin)
+- **404**: File not found
+- **413**: File too large (>16 MB)
+- **500**: Internal Server Error

@@ -1,14 +1,27 @@
-# __init__.py
-# Flask application factory
-
 from flask import Flask
-from config import Config
+from flask_cors import CORS
+
 
 def create_app():
     app = Flask(__name__)
-    app.config.from_object(Config)
     
-    from app.routes.upload_routes import upload_bp
-    app.register_blueprint(upload_bp, url_prefix='/api/files')
+    # Load configuration
+    app.config.from_object('app.config.Config')
+    
+    # Enable CORS
+    CORS(app, resources={r"/*": {"origins": "*"}})
+    
+    # Import and register blueprints
+    from app.routes import file_bp
+    app.register_blueprint(file_bp, url_prefix='/files')
+    
+    # Register error handlers
+    from app.utils.error_handlers import register_error_handlers
+    register_error_handlers(app)
+    
+    # Health check endpoint
+    @app.route('/health')
+    def health():
+        return {'status': 'healthy', 'service': 'file-service'}
     
     return app
